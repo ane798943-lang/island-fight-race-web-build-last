@@ -1,0 +1,80 @@
+name: Build slim Godot web template
+
+on:
+  workflow_dispatch:
+    inputs:
+      godot_ref:
+        description: "Godot tag to build (must match the editor you export with)"
+        default: "4.7.2-stable"
+
+env:
+  BASELINE_WASM_BYTES: "19352130"   # size of the godot.wasm in your current template
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Get this repo (custom.py + build_profile.json)
+        uses: actions/checkout@v4
+        with:
+          path: slim
+
+      - name: Get Godot source
+        uses: actions/checkout@v4
+        with:
+          repository: godotengine/godot
+          ref: ${{ inputs.godot_ref }}
+          path: godot
+
+      - name: Read the Emscripten version this Godot release expects
+        id: em
+        shell: bash
+        run: |
+          v=$(grep -oP 'EM_VERSION:\s*\K[0-9.]+' godot/.github/workflows/web_builds.yml | head -1)
+          echo "version=${v:-4.0.11}" >> "$GITHUB_OUTPUT"
+          echo "Using Emscripten ${v:-4.0.11}"
+
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ steps.em.outputs.version }}
+          actions-cache-folder: emsdk-cache
+
+      - run: python3 -m pip install scons
+
+      - name: Copy build config into the Godot source
+        run: cp slim/custom.py slim/build_profile.json godot/
+
+      - name: Build web template (release, single thread)
+        shell: bash
+        working-directory: godot
+        run: |
+          scons platform=web target=template_release threads=no dlink_enabled=no \
+                build_profile=build_profile.json 2>&1 | tee ../build.log
+
+      - name: Package and check size
+        shell: bash
+        run: |
+          zip=$(ls godot/bin/*.web.template_release*.nothreads.zip | head -1)
+          cp "$zip" web_template.zip
+          size=$(unzip -p web_template.zip godot.wasm | wc -c)
+          echo "New godot.wasm : $size bytes"
+          echo "Old godot.wasm : $BASELINE_WASM_BYTES bytes"
+          unzip -l web_template.zip
+          if [ "$size" -ge "$BASELINE_WASM_BYTES" ]; then
+            echo "::error::New wasm is NOT smaller than your current one. Do not use this build. Check build.log."
+            exit 1
+          fi
+          echo "OK: smaller by $(( BASELINE_WASM_BYTES - size )) bytes"
+
+      - name: Warnings about ignored options
+        if: always()
+        shell: bash
+        run: grep -iE "unknown|ignored|warning: .*(option|variable)" build.log || echo "No ignored options."
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: web_template
+          path: |
+            web_template.zip
+            build.log
