@@ -69,7 +69,7 @@ jobs:
       - name: Warnings about ignored options
         if: always()
         shell: bash
-        run: grep -iE "unknown|ignored|warning: .*(option|variable)" build.log || echo "No ignored options."
+                run: 'grep -iE "unknown|ignored|warning: .*(option|variable)" build.log || echo "No ignored options."'
 
       - uses: actions/upload-artifact@v4
         if: always()
